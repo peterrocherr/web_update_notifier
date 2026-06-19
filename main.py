@@ -2,89 +2,124 @@ import os
 import logging
 import requests
 import re
+import sys
 from abc import ABC, abstractmethod
 from bs4 import BeautifulSoup
 
-# Configuración de logs
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+# Clean logging configuration
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 
 class BotComms(ABC):
     @abstractmethod
-    def enviar_mensaje(self, mensaje: str): pass
+    def send_message(self, message: str): pass
 
 class TelegramBot(BotComms):
     def __init__(self, token: str, chat_id: str):
         self.api_url = f"https://api.telegram.org/bot{token}/sendMessage"
         self.chat_id = chat_id
 
-    def enviar_mensaje(self, mensaje: str):
+    def send_message(self, message: str):
         try:
-            requests.post(self.api_url, json={"chat_id": self.chat_id, "text": mensaje}, timeout=10).raise_for_status()
-            logging.info("Notificación enviada a Telegram.")
-        except Exception as e:
-            logging.error(f"Error con Telegram: {e}")
+            response = requests.post(self.api_url, json={"chat_id": self.chat_id, "text": message}, timeout=10)
+            response.raise_for_status()
+            logging.info("Notification sent to Telegram successfully.")
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Failed to send message to Telegram: {e}")
 
 class PageReader:
     def __init__(self, url: str):
         self.url = url
         self.session = requests.Session()
         self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9'
         })
 
-    def obtener_estado_actual(self) -> str:
+    def get_current_status(self) -> str:
         try:
             response = self.session.get(self.url, timeout=15)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, 'html.parser')
 
-            # Buscar la clase estándar de WooCommerce
-            elemento_stock = soup.find(class_='stock')
-            if elemento_stock:
-                return elemento_stock.text.strip()
+            stock_element = soup.find(class_='stock')
+            if stock_element:
+                return stock_element.text.strip()
 
-            # Búsqueda de respaldo por la palabra "Availability:"
-            etiqueta_disponibilidad = soup.find(string=re.compile("Availability:", re.IGNORECASE))
-            if etiqueta_disponibilidad:
-                return etiqueta_disponibilidad.parent.text.replace("Availability:", "").strip()
+            availability_label = soup.find(string=re.compile("Availability:", re.IGNORECASE))
+            if availability_label and availability_label.parent:
+                return availability_label.parent.text.replace("Availability:", "").strip()
 
-            return "ESTADO DESCONOCIDO"
+            logging.warning("Could not find standard stock indicators on the page.")
+            return "UNKNOWN STATUS"
+            
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Network or HTTP error accessing the website: {e}")
+            return None
         except Exception as e:
-            logging.error(f"Error de red: {e}")
+            logging.error(f"Unexpected error parsing the website: {e}")
             return None
 
 class Checker:
-    def __init__(self, reader, bot, archivo_estado="ultimo_estado.txt"):
+    def __init__(self, reader, bot, status_file="ultimo_estado.txt"):
         self.reader = reader
         self.bot = bot
-        self.archivo_estado = archivo_estado
+        self.status_file = status_file
 
-    def ejecutar(self):
-        estado_actual = self.reader.obtener_estado_actual()
-        if not estado_actual: return # Si hay error de red, abortamos
+    def _read_last_status(self):
+        try:
+            if os.path.exists(self.status_file):
+                with open(self.status_file, 'r', encoding='utf-8') as f:
+                    return f.read().strip()
+            return None
+        except IOError as e:
+            logging.error(f"Error reading status file: {e}")
+            return None
 
-        ultimo_estado = None
-        if os.path.exists(self.archivo_estado):
-            with open(self.archivo_estado, 'r', encoding='utf-8') as f:
-                ultimo_estado = f.read().strip()
+    def _save_current_status(self, status: str):
+        try:
+            with open(self.status_file, 'w', encoding='utf-8') as f:
+                f.write(status)
+        except IOError as e:
+            logging.error(f"Error writing to status file: {e}")
 
-        if ultimo_estado is None:
-            # Primera ejecución: guarda pero no avisa
-            with open(self.archivo_estado, 'w', encoding='utf-8') as f: f.write(estado_actual)
-            logging.info(f"Estado inicial guardado: {estado_actual}")
+    def execute(self):
+        logging.info("Checking product status...")
+        current_status = self.reader.get_current_status()
+        
+        # Abort cycle if there was a network error (keeps the last good state safe)
+        if not current_status:
+            logging.warning("Cycle aborted due to missing status data.")
+            return 
+
+        last_status = self._read_last_status()
+
+        if last_status is None:
+            logging.info(f"First run detected. Initial status saved: '{current_status}'.")
+            self._save_current_status(current_status)
             return
 
-        if estado_actual != ultimo_estado:
-            self.bot.enviar_mensaje(f"🔔 ¡Actualización de Stock!\n\nProducto: Estradiol Enanthate\nEstado actual: {estado_actual}\nEnlace: {self.reader.url}")
-            with open(self.archivo_estado, 'w', encoding='utf-8') as f: f.write(estado_actual)
-            logging.info("Cambio detectado y notificado.")
+        if current_status != last_status:
+            logging.info(f"Status changed: '{last_status}' -> '{current_status}'. Notifying.")
+            message = f"Stock Update!\n\nCurrent status: {current_status}\nLink: {self.reader.url}"
+            self.bot.send_message(message)
+            self._save_current_status(current_status)
         else:
-            logging.info("Sin cambios en el stock.")
+            logging.info(f"No changes in stock. Current status is still: '{current_status}'.")
 
 if __name__ == "__main__":
     TOKEN = os.getenv("TELEGRAM_TOKEN")
     CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
     URL = os.getenv("URL_PRODUCTO")
     
-    mi_checker = Checker(PageReader(URL), TelegramBot(TOKEN, CHAT_ID))
-    mi_checker.ejecutar()
+    # Fail fast if secrets are missing
+    missing_secrets = []
+    if not TOKEN: missing_secrets.append("TELEGRAM_TOKEN")
+    if not CHAT_ID: missing_secrets.append("TELEGRAM_CHAT_ID")
+    if not URL: missing_secrets.append("URL_PRODUCTO")
+    
+    if missing_secrets:
+        logging.critical(f"Missing required environment variables: {', '.join(missing_secrets)}. Please check GitHub Secrets.")
+        sys.exit(1)
+    
+    my_checker = Checker(PageReader(URL), TelegramBot(TOKEN, CHAT_ID))
+    my_checker.execute()
