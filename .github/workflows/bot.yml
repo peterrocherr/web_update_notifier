@@ -6,7 +6,8 @@ on:
   workflow_dispatch: # Permite pulsar el boton manual
 
 permissions:
-  contents: write
+  contents: write # Permiso para guardar el archivo txt en tu repositorio
+  actions: write # Permiso necesario para que funcione el marcapasos (keepalive)
 
 jobs:
   run-bot:
@@ -28,7 +29,7 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           URL_PRODUCTO: ${{ secrets.URL_PRODUCTO }}
-          SCRAPER_API_KEY: ${{ secrets.SCRAPER_API_KEY }} # <-- ESTA ES LA MAGIA QUE FALTABA
+          SCRAPER_API_KEY: ${{ secrets.SCRAPER_API_KEY }}
         run: python main.py
 
       - name: Guardar estado en el repositorio
@@ -36,3 +37,6 @@ jobs:
         with:
           commit_message: "[Bot] Actualiza ultimo_estado.txt"
           file_pattern: "ultimo_estado.txt"
+
+      - name: Evitar apagado por inactividad (Keepalive)
+        uses: gautamkrishnar/keepalive-workflow@v2
