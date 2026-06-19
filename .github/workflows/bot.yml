@@ -2,12 +2,11 @@ name: Bot Checker de Stock
 
 on:
   schedule:
-    - cron: '*/10 * * * *' # Se ejecuta cada 10 minutos para no gastar el limite gratuito
-  workflow_dispatch: # Permite pulsar el boton manual
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
 
 permissions:
-  contents: write # Permiso para guardar el archivo txt en tu repositorio
-  actions: write # Permiso necesario para que funcione el marcapasos (keepalive)
+  contents: write
 
 jobs:
   run-bot:
@@ -32,11 +31,10 @@ jobs:
           SCRAPER_API_KEY: ${{ secrets.SCRAPER_API_KEY }}
         run: python main.py
 
-      - name: Guardar estado en el repositorio
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: "[Bot] Actualiza ultimo_estado.txt"
-          file_pattern: "ultimo_estado.txt"
-
-      - name: Evitar apagado por inactividad (Keepalive)
-        uses: gautamkrishnar/keepalive-workflow@v2
+      - name: Guardar estado nativo
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add ultimo_estado.txt
+          git commit -m "[Bot] Actualiza ultimo_estado.txt" || echo "Sin cambios en el stock"
+          git push
