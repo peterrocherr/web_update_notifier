@@ -84,7 +84,7 @@ class Checker:
 if __name__ == "__main__":
     TOKEN = os.getenv("TELEGRAM_TOKEN")
     CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-    URL = "https://astrovials.com/product/estradiol-enanthate/"
+    URL = os.getenv("URL_PRODUCTO")
     
     mi_checker = Checker(PageReader(URL), TelegramBot(TOKEN, CHAT_ID))
     mi_checker.ejecutar()
