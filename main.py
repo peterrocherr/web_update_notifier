@@ -3,11 +3,9 @@ import logging
 import requests
 import re
 import sys
-import cloudscraper
+import tls_client
 from abc import ABC, abstractmethod
 from bs4 import BeautifulSoup
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
 # Clean logging configuration
 logging.basicConfig(
@@ -30,6 +28,7 @@ class TelegramBot(BotComms):
 
     def send_message(self, message: str):
         try:
+            # We use standard requests for Telegram API (no anti-bot needed here)
             response = requests.post(
                 self.api_url,
                 json={
@@ -49,44 +48,52 @@ class PageReader:
     def __init__(self, url: str):
         self.url = url
 
-        # --- CAMBIO CLAVE: Usamos cloudscraper para imitar un navegador real ---
-        self.session = cloudscraper.create_scraper(
-            browser={
-                'browser': 'chrome',
-                'platform': 'windows',
-                'desktop': True
-            }
+        # --- CAMBIO CLAVE: tls_client para bypass avanzado ---
+        # Imitamos a un navegador Chrome muy específico
+        self.session = tls_client.Session(
+            client_identifier="chrome_120",
+            random_tls_extension_order=True
         )
 
-        retry_strategy = Retry(
-            total=3,
-            connect=3,
-            read=3,
-            status=3,
-            backoff_factor=2,
-            status_forcelist=[
-                429,
-                500,
-                502,
-                503,
-                504
-            ],
-            allowed_methods=["GET"]
-        )
-
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-
-        self.session.mount("https://", adapter)
-        self.session.mount("http://", adapter)
+        self.session.headers.update({
+            'User-Agent': (
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                'Chrome/120.0.0.0 Safari/537.36'
+            ),
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1'
+        })
 
     def get_current_status(self) -> str:
         try:
-            response = self.session.get(
-                self.url,
-                timeout=15
-            )
+            # Intentos manuales (tls_client no tiene adapter nativo como requests)
+            max_retries = 3
+            response = None
+            
+            for attempt in range(max_retries):
+                response = self.session.get(
+                    self.url,
+                    timeout_seconds=15
+                )
+                
+                # tls_client uses .status_code instead of raise_for_status()
+                if response.status_code == 200:
+                    break
+                else:
+                    logging.warning(f"Attempt {attempt + 1} failed with status code: {response.status_code}")
+                    import time
+                    time.sleep(2) # Backoff manual
 
-            response.raise_for_status()
+            if response.status_code != 200:
+                logging.error(f"Failed to load page after {max_retries} attempts. Status: {response.status_code}")
+                return None
 
             soup = BeautifulSoup(
                 response.text,
@@ -117,12 +124,6 @@ class PageReader:
             )
 
             return "UNKNOWN STATUS"
-
-        except requests.exceptions.RequestException as e:
-            logging.error(
-                f"Network or HTTP error accessing the website: {e}"
-            )
-            return None
 
         except Exception as e:
             logging.error(
