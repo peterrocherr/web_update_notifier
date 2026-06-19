@@ -2,11 +2,11 @@ name: Bot Checker de Stock
 
 on:
   schedule:
-    - cron: '*/5 * * * *' # Se ejecuta cada 5 minutos exactos de forma ilimitada
-  workflow_dispatch: # Permite pulsar un botón en GitHub para probarlo manualmente
+    - cron: '*/10 * * * *' # Se ejecuta cada 10 minutos para no gastar el limite gratuito
+  workflow_dispatch: # Permite pulsar el boton manual
 
 permissions:
-  contents: write # Permiso para que el bot actualice el archivo de texto
+  contents: write
 
 jobs:
   run-bot:
@@ -28,6 +28,7 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           URL_PRODUCTO: ${{ secrets.URL_PRODUCTO }}
+          SCRAPER_API_KEY: ${{ secrets.SCRAPER_API_KEY }} # <-- ESTA ES LA MAGIA QUE FALTABA
         run: python main.py
 
       - name: Guardar estado en el repositorio
