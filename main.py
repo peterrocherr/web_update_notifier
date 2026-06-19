@@ -3,6 +3,7 @@ import logging
 import requests
 import re
 import sys
+import cloudscraper
 from abc import ABC, abstractmethod
 from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
@@ -48,7 +49,14 @@ class PageReader:
     def __init__(self, url: str):
         self.url = url
 
-        self.session = requests.Session()
+        # --- CAMBIO CLAVE: Usamos cloudscraper para imitar un navegador real ---
+        self.session = cloudscraper.create_scraper(
+            browser={
+                'browser': 'chrome',
+                'platform': 'windows',
+                'desktop': True
+            }
+        )
 
         retry_strategy = Retry(
             total=3,
@@ -70,14 +78,6 @@ class PageReader:
 
         self.session.mount("https://", adapter)
         self.session.mount("http://", adapter)
-
-        self.session.headers.update({
-            'User-Agent': (
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                'AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36'
-            ),
-            'Accept-Language': 'en-US,en;q=0.9'
-        })
 
     def get_current_status(self) -> str:
         try:
