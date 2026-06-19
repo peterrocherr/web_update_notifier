@@ -3,9 +3,10 @@ import logging
 import requests
 import re
 import sys
-import tls_client
 from abc import ABC, abstractmethod
 from bs4 import BeautifulSoup
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # Clean logging configuration
 logging.basicConfig(
@@ -28,7 +29,6 @@ class TelegramBot(BotComms):
 
     def send_message(self, message: str):
         try:
-            # We use standard requests for Telegram API (no anti-bot needed here)
             response = requests.post(
                 self.api_url,
                 json={
@@ -45,55 +45,42 @@ class TelegramBot(BotComms):
 
 
 class PageReader:
-    def __init__(self, url: str):
-        self.url = url
+    def __init__(self, url: str, api_key: str):
+        self.target_url = url
+        self.api_key = api_key
+        self.scraper_endpoint = "https://api.scraperapi.com/"
 
-        # --- CAMBIO CLAVE: tls_client para bypass avanzado ---
-        # Imitamos a un navegador Chrome muy específico
-        self.session = tls_client.Session(
-            client_identifier="chrome_120",
-            random_tls_extension_order=True
+        self.session = requests.Session()
+
+        retry_strategy = Retry(
+            total=3,
+            connect=3,
+            read=3,
+            status=3,
+            backoff_factor=2,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET"]
         )
 
-        self.session.headers.update({
-            'User-Agent': (
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                'AppleWebKit/537.36 (KHTML, like Gecko) '
-                'Chrome/120.0.0.0 Safari/537.36'
-            ),
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Sec-Fetch-User': '?1'
-        })
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
 
     def get_current_status(self) -> str:
         try:
-            # Intentos manuales (tls_client no tiene adapter nativo como requests)
-            max_retries = 3
-            response = None
+            # Using the exact payload structure recommended by ScraperAPI
+            payload = {
+                'api_key': self.api_key, 
+                'url': self.target_url
+            }
             
-            for attempt in range(max_retries):
-                response = self.session.get(
-                    self.url,
-                    timeout_seconds=15
-                )
-                
-                # tls_client uses .status_code instead of raise_for_status()
-                if response.status_code == 200:
-                    break
-                else:
-                    logging.warning(f"Attempt {attempt + 1} failed with status code: {response.status_code}")
-                    import time
-                    time.sleep(2) # Backoff manual
+            response = self.session.get(
+                self.scraper_endpoint,
+                params=payload,
+                timeout=60
+            )
 
-            if response.status_code != 200:
-                logging.error(f"Failed to load page after {max_retries} attempts. Status: {response.status_code}")
-                return None
+            response.raise_for_status()
 
             soup = BeautifulSoup(
                 response.text,
@@ -124,6 +111,12 @@ class PageReader:
             )
 
             return "UNKNOWN STATUS"
+
+        except requests.exceptions.RequestException as e:
+            logging.error(
+                f"Network or HTTP error accessing the website via proxy: {e}"
+            )
+            return None
 
         except Exception as e:
             logging.error(
@@ -180,14 +173,13 @@ class Checker:
 
     def execute(self):
         logging.info(
-            "Checking product status..."
+            "Checking product status via ScraperAPI..."
         )
 
         current_status = (
             self.reader.get_current_status()
         )
 
-        # Abort cycle if there was a network error
         if not current_status:
             logging.warning(
                 "Cycle aborted due to missing status data."
@@ -218,9 +210,9 @@ class Checker:
             )
 
             message = (
-                "🔔 Stock Update!\n\n"
+                "Stock Update!\n\n"
                 f"Current status: {current_status}\n"
-                f"Link: {self.reader.url}"
+                f"Link: {self.reader.target_url}"
             )
 
             self.bot.send_message(
@@ -240,34 +232,17 @@ class Checker:
 
 
 if __name__ == "__main__":
-    TOKEN = os.getenv(
-        "TELEGRAM_TOKEN"
-    )
-
-    CHAT_ID = os.getenv(
-        "TELEGRAM_CHAT_ID"
-    )
-
-    URL = os.getenv(
-        "URL_PRODUCTO"
-    )
+    TOKEN = os.getenv("TELEGRAM_TOKEN")
+    CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+    URL = os.getenv("URL_PRODUCTO")
+    API_KEY = os.getenv("SCRAPER_API_KEY")
 
     missing_secrets = []
 
-    if not TOKEN:
-        missing_secrets.append(
-            "TELEGRAM_TOKEN"
-        )
-
-    if not CHAT_ID:
-        missing_secrets.append(
-            "TELEGRAM_CHAT_ID"
-        )
-
-    if not URL:
-        missing_secrets.append(
-            "URL_PRODUCTO"
-        )
+    if not TOKEN: missing_secrets.append("TELEGRAM_TOKEN")
+    if not CHAT_ID: missing_secrets.append("TELEGRAM_CHAT_ID")
+    if not URL: missing_secrets.append("URL_PRODUCTO")
+    if not API_KEY: missing_secrets.append("SCRAPER_API_KEY")
 
     if missing_secrets:
         logging.critical(
@@ -275,15 +250,11 @@ if __name__ == "__main__":
             f"{', '.join(missing_secrets)}. "
             "Please check GitHub Secrets."
         )
-
         sys.exit(1)
 
     my_checker = Checker(
-        PageReader(URL),
-        TelegramBot(
-            TOKEN,
-            CHAT_ID
-        )
+        PageReader(URL, API_KEY),
+        TelegramBot(TOKEN, CHAT_ID)
     )
 
     my_checker.execute()
